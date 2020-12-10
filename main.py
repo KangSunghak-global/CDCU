@@ -2,6 +2,8 @@ import SourceGen
 import os
 import glob
 import datetime
+import time
+import Arxml_gen
 
 Curruntpath = os.getcwd()
 
@@ -93,12 +95,31 @@ def main():
             if not os.path.isdir(Arxmlpath): #creat folder if not folder
                 os.makedirs(Arxmlpath)
 
+            arxmlfile_list = glob.glob(Arxmlpath + "\\" + "*.arxml")
+            arxmlNum = len(arxmlfile_list)
+
+            print("find Arxmlfile :", arxmlfile_list)
+
+            if arxmlNum == 0:
+                print("put Arxml file into Arxml folder")
+            else:
+                testpath = os.path.join(Arxmlpath, 'test.arxml')
+                arxmlpath = os.path.join(Arxmlpath, arxmlfile_list[0])
+
+            Arxml = Arxml_gen.ArxmlParser(arxmlpath, excelfile_list[0]) # arxml class instance
+            ccan_ind = Arxml.CCAN_extract_data() # runnable name extract
+            Arxml.xml_gen(ccan_ind)
+            Arxml.make_xml(testpath)
+            #print(list)
+
     else:
         print("put into file after excel folder is created")
         os.makedirs(filepath)
 
 if __name__ == '__main__':
+    start = time.time()
     main()
-
+    end = time.time() - start
+    print ('Operating Time : {0}s' .format(end))
 
 
