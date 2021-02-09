@@ -36,6 +36,9 @@ class CANCodeGenerate:
                 self.TimoutCol = col[2].column
             elif col[2].value == "Invalid Flag":
                 self.InvalCol = col[2].column
+            elif col[2].value == "Invalid Flag Description":
+                self.E2ECol = col[2].column
+
 
     def Ind_variable(self, sourcefile, headerfile):
         MessageInd = list()
@@ -46,7 +49,7 @@ class CANCodeGenerate:
 
         #remove duplicated factor through 'set'
         MessageInd = set(MessageInd)
-        # it shoud be changed list type, which is able to access
+        # it should be changed list type, which is able to access
         MessageInd = list(MessageInd)
 
         for i in MessageInd:
@@ -308,23 +311,32 @@ class CANCodeGenerate:
 
     def CCANFD_File(self, sourcefile):
         filename = os.path.basename(sourcefile)
-        filename = filename.split(".")
+        filename = filename.split("_")
         Source = codeStyle.Start_State(filename[0])
+        E2E_TxMessage = list()
+        E2E_RxMessage = list()
         CAN_Message_ind = list()
+        CAN_Message_ind_E2E = list()
         CAN_RxSingal = list()
         RxFunctionSet = ""
         RxSignalSet = ""
         RxOperSet = ""
         RTERxFunction = ""
         CAN_Tx_Message = list()
+        CAN_Tx_Message_E2E = list()
         CAN_TxSingal = list()
         TxSignalSet =""
         TxVarOldSet =""
         TxFunctionSet = ""
         TxOperSet = ""
         RTETxFunction = ""
+        ClusterName = "CCAN"
 
         m = re.compile('var_cdcu.+')
+        n = re.compile('.+Crc.+')
+
+        test = list()
+        test1 = list()
 
         for i in range(5, self.max_row):
             CANChannel = self.wb.cell(row=i, column=self.CANChannelCol).value
@@ -335,23 +347,39 @@ class CANCodeGenerate:
                 Signal = self.wb.cell(row=i, column=self.SigCol).value
                 Variable = self.wb.cell(row=i, column=self.VarNameCol).value
                 Sender = self.wb.cell(row=i, column=self.SenderCol).value
+
+                ### Search E2E Message ###
+                q = n.match(str(Signal))
+                if q: #include crc signal
+                    E2E_RxMessage.append(Message)
+
                 p = m.match(str(Variable))
                 if p:
-                    CAN_Message_ind.append([Message, int(Cycle)])
-                    CAN_RxSingal.append([Message, Signal, Variable, Sender])
+                   CAN_Message_ind.append([Message, int(Cycle)])
+                   CAN_RxSingal.append([Message, Signal, Variable, Sender])
                 else:
                     pass
-            elif CANChannel ==  "C-CANFD" and RxTx == "Tx":
+            elif CANChannel ==  "C-CANFD" or CANChannel == "C/P/G-CANFD" and RxTx == "Tx":
                 Message = self.wb.cell(row=i, column=self.MsgCol).value
                 Signal = self.wb.cell(row=i, column=self.SigCol).value
                 Variable = self.wb.cell(row=i, column=self.VarNameCol).value
                 size = self.wb.cell(row=i, column=self.TypeCol).value
+
+                ### Search E2E Message ###
+                q = n.match(str(Signal))
+                if q:  # include crc signal
+                    E2E_TxMessage.append(Message)
+
                 p = m.match(str(Variable))
                 if p:
                     CAN_Tx_Message.append(Message)
                     CAN_TxSingal.append([Message, Signal, Variable, size])
                 else:
                     pass
+
+
+        print("E2E_TxMessage:", E2E_TxMessage)
+        print("E2E_RxMessage:", E2E_RxMessage)
 
         # remove duplicated factor through 'set'
         CAN_Message_ind = set(map(tuple, CAN_Message_ind)) # remove 2 dimension list
@@ -360,26 +388,49 @@ class CANCodeGenerate:
         CAN_Message_ind = list(CAN_Message_ind)
         CAN_Tx_Message = list(CAN_Tx_Message)
 
-        for Name, Cycle in CAN_Message_ind:
+        for msg, cycle in CAN_Message_ind:
+            CAN_Message_ind_E2E.append([msg, int(cycle), 0])
+
+        for idx, a in enumerate(CAN_Message_ind_E2E):
+            for temp in E2E_RxMessage:
+                if a[0] == temp:
+                    CAN_Message_ind_E2E[idx][2] = 1 ## E2E Message
+
+        for msg in CAN_Tx_Message:
+            CAN_Tx_Message_E2E.append([msg, 0])
+
+        for idx, a in enumerate(CAN_Tx_Message_E2E):
+            for temp in E2E_TxMessage:
+                if a[0] == temp:
+                    CAN_Tx_Message_E2E[idx][1] = 1 ## E2E Message
+
+        print("CAN_TxMessage:", CAN_Tx_Message)
+        print("CAN_TxMessage length:", len(CAN_Tx_Message))
+        print("CAN_TxMessage E2E:", CAN_Tx_Message_E2E)
+        print("CAN_TxMessage E2E length:", len(CAN_Tx_Message_E2E))
+
+        for Name, Cycle, E2E_Flag in CAN_Message_ind_E2E:
             Source += codeStyle.Indicate_Function(filename[0], Name, Cycle) # Message Ind, Timeout Ind function create
             for Message, Signal, Variable, Sender in CAN_RxSingal:
                 if Message == Name:
-                   RxSignalSet += codeStyle.Rx_Signal(Variable, filename[0], Message, Signal, Sender) # variable receive of assigned message
-            RxFunctionSet += codeStyle.Rx_Function(filename[0], Name, RxSignalSet) # merge between function and receive variable
+                   if E2E_Flag == 1:
+                       RxSignalSet += codeStyle.Rx_E2E_Signal(Variable, Message, Signal)  # variable receive of assigned message
+                   else:
+                       RxSignalSet += codeStyle.Rx_Signal(Variable, filename[0],ClusterName, Message, Signal) # variable receive of assigned message
+            RxFunctionSet += codeStyle.Rx_Function(ClusterName, filename[0], Name, RxSignalSet, E2E_Flag) # merge between function and receive variable
             RxOperSet += codeStyle.Rx_FunctionSet(filename[0], Name)
             RxSignalSet = "" #initialize
-
+        #print("source:", Source)
         RTERxFunction = codeStyle.RTE_Rx_Function(filename[0], RxOperSet)
         Source += RxFunctionSet # add Rx signal logic
 
-
-        for TxMessage in CAN_Tx_Message:
+        for TxMessage, E2E_Flag in CAN_Tx_Message_E2E:
             for Message, Signal, Variable, size in CAN_TxSingal:
                 if TxMessage == Message:
                    TxVarOldSet += codeStyle.variable_Old(size, Variable)
-                   TxSignalSet += codeStyle.Tx_Signal(Variable, filename[0], Message, Signal)
-            TxFunctionSet += codeStyle.Tx_Function(filename[0],TxMessage,TxVarOldSet,TxSignalSet)
-            TxOperSet += codeStyle.Tx_FunctionSet(filename[0], Name)
+                   TxSignalSet += codeStyle.Tx_Signal(Variable, filename[0],ClusterName, Message, Signal, E2E_Flag)
+            TxFunctionSet += codeStyle.Tx_Function(filename[0],ClusterName, TxMessage,TxVarOldSet,TxSignalSet, E2E_Flag)
+            TxOperSet += codeStyle.Tx_FunctionSet(filename[0], TxMessage)
             TxVarOldSet = "" #initialize
             TxSignalSet = "" #initialize
 
@@ -393,4 +444,272 @@ class CANCodeGenerate:
         with open(sourcefile, 'a') as f:
             f.write(Source)
 
+    def PCANFD_File(self, sourcefile):
+        filename = os.path.basename(sourcefile)
+        filename = filename.split("_")
+        Source = codeStyle.Start_State(filename[0])
+        E2E_TxMessage = list()
+        E2E_RxMessage = list()
+        CAN_Message_ind = list()
+        CAN_Message_ind_E2E = list()
+        CAN_RxSingal = list()
+        RxFunctionSet = ""
+        RxSignalSet = ""
+        RxOperSet = ""
+        RTERxFunction = ""
+        CAN_Tx_Message = list()
+        CAN_Tx_Message_E2E = list()
+        CAN_TxSingal = list()
+        TxSignalSet =""
+        TxVarOldSet =""
+        TxFunctionSet = ""
+        TxOperSet = ""
+        RTETxFunction = ""
+        ClusterName = "PCAN"
 
+        m = re.compile('var_cdcu.+')
+        n = re.compile('.+Crc.+')
+
+        test = list()
+        test1 = list()
+
+        for i in range(5, self.max_row):
+            CANChannel = self.wb.cell(row=i, column=self.CANChannelCol).value
+            RxTx = self.wb.cell(row=i, column=self.DirCol).value
+            if CANChannel ==  "P-CANFD" and RxTx == "Rx":
+                Message = self.wb.cell(row=i, column=self.MsgCol).value
+                Cycle = self.wb.cell(row=i, column=self.CycleCol).value
+                Signal = self.wb.cell(row=i, column=self.SigCol).value
+                Variable = self.wb.cell(row=i, column=self.VarNameCol).value
+                Sender = self.wb.cell(row=i, column=self.SenderCol).value
+
+                ### Search E2E Message ###
+                q = n.match(str(Signal))
+                if q: #include crc signal
+                    E2E_RxMessage.append(Message)
+
+                p = m.match(str(Variable))
+                if p:
+                   CAN_Message_ind.append([Message, int(Cycle)])
+                   CAN_RxSingal.append([Message, Signal, Variable, Sender])
+                else:
+                    pass
+            elif CANChannel ==  "P-CANFD" or CANChannel == "C/P/G-CANFD" and RxTx == "Tx":
+                Message = self.wb.cell(row=i, column=self.MsgCol).value
+                Signal = self.wb.cell(row=i, column=self.SigCol).value
+                Variable = self.wb.cell(row=i, column=self.VarNameCol).value
+                size = self.wb.cell(row=i, column=self.TypeCol).value
+
+                ### Search E2E Message ###
+                q = n.match(str(Signal))
+                if q:  # include crc signal
+                    E2E_TxMessage.append(Message)
+
+                p = m.match(str(Variable))
+                if p:
+                    CAN_Tx_Message.append(Message)
+                    CAN_TxSingal.append([Message, Signal, Variable, size])
+                else:
+                    pass
+
+
+        print("E2E_TxMessage:", E2E_TxMessage)
+        print("E2E_RxMessage:", E2E_RxMessage)
+
+        # remove duplicated factor through 'set'
+        CAN_Message_ind = set(map(tuple, CAN_Message_ind)) # remove 2 dimension list
+        CAN_Tx_Message = set(CAN_Tx_Message)
+        # it should be changed list type, which is able to access
+        CAN_Message_ind = list(CAN_Message_ind)
+        CAN_Tx_Message = list(CAN_Tx_Message)
+
+        for msg, cycle in CAN_Message_ind:
+            CAN_Message_ind_E2E.append([msg, int(cycle), 0])
+
+        for idx, a in enumerate(CAN_Message_ind_E2E):
+            for temp in E2E_RxMessage:
+                if a[0] == temp:
+                    CAN_Message_ind_E2E[idx][2] = 1 ## E2E Message
+
+        for msg in CAN_Tx_Message:
+            CAN_Tx_Message_E2E.append([msg, 0])
+
+        for idx, a in enumerate(CAN_Tx_Message_E2E):
+            for temp in E2E_TxMessage:
+                if a[0] == temp:
+                    CAN_Tx_Message_E2E[idx][1] = 1 ## E2E Message
+
+        print("CAN_TxMessage:", CAN_Tx_Message)
+        print("CAN_TxMessage length:", len(CAN_Tx_Message))
+        print("CAN_TxMessage E2E:", CAN_Tx_Message_E2E)
+        print("CAN_TxMessage E2E length:", len(CAN_Tx_Message_E2E))
+
+        for Name, Cycle, E2E_Flag in CAN_Message_ind_E2E:
+            Source += codeStyle.Indicate_Function(filename[0], Name, Cycle) # Message Ind, Timeout Ind function create
+            for Message, Signal, Variable, Sender in CAN_RxSingal:
+                if Message == Name:
+                   if E2E_Flag == 1:
+                       RxSignalSet += codeStyle.Rx_E2E_Signal(Variable, Message, Signal)  # variable receive of assigned message
+                   else:
+                       RxSignalSet += codeStyle.Rx_Signal(Variable, filename[0],ClusterName, Message, Signal) # variable receive of assigned message
+            RxFunctionSet += codeStyle.Rx_Function(ClusterName, filename[0], Name, RxSignalSet, E2E_Flag) # merge between function and receive variable
+            RxOperSet += codeStyle.Rx_FunctionSet(filename[0], Name)
+            RxSignalSet = "" #initialize
+        #print("source:", Source)
+        RTERxFunction = codeStyle.RTE_Rx_Function(filename[0], RxOperSet)
+        Source += RxFunctionSet # add Rx signal logic
+
+        for TxMessage, E2E_Flag in CAN_Tx_Message_E2E:
+            for Message, Signal, Variable, size in CAN_TxSingal:
+                if TxMessage == Message:
+                   TxVarOldSet += codeStyle.variable_Old(size, Variable)
+                   TxSignalSet += codeStyle.Tx_Signal(Variable, filename[0],ClusterName, Message, Signal, E2E_Flag)
+            TxFunctionSet += codeStyle.Tx_Function(filename[0],ClusterName, TxMessage,TxVarOldSet,TxSignalSet, E2E_Flag)
+            TxOperSet += codeStyle.Tx_FunctionSet(filename[0], TxMessage)
+            TxVarOldSet = "" #initialize
+            TxSignalSet = "" #initialize
+
+        Source += TxFunctionSet  # add Tx signal logic
+
+        RTETxFunction = codeStyle.RTE_Tx_Function(filename[0], TxOperSet)
+
+        Source += RTERxFunction # add Rx RTE function
+        Source += RTETxFunction # add Tx RTE function
+
+        with open(sourcefile, 'a') as f:
+            f.write(Source)
+
+    def GCANFD_File(self, sourcefile):
+        filename = os.path.basename(sourcefile)
+        filename = filename.split("_")
+        Source = codeStyle.Start_State(filename[0])
+        E2E_TxMessage = list()
+        E2E_RxMessage = list()
+        CAN_Message_ind = list()
+        CAN_Message_ind_E2E = list()
+        CAN_RxSingal = list()
+        RxFunctionSet = ""
+        RxSignalSet = ""
+        RxOperSet = ""
+        RTERxFunction = ""
+        CAN_Tx_Message = list()
+        CAN_Tx_Message_E2E = list()
+        CAN_TxSingal = list()
+        TxSignalSet =""
+        TxVarOldSet =""
+        TxFunctionSet = ""
+        TxOperSet = ""
+        RTETxFunction = ""
+        ClusterName = "GCAN"
+
+        m = re.compile('var_cdcu.+')
+        n = re.compile('.+Crc.+')
+
+        test = list()
+        test1 = list()
+
+        for i in range(5, self.max_row):
+            CANChannel = self.wb.cell(row=i, column=self.CANChannelCol).value
+            RxTx = self.wb.cell(row=i, column=self.DirCol).value
+            if CANChannel ==  "G-CANFD" and RxTx == "Rx":
+                Message = self.wb.cell(row=i, column=self.MsgCol).value
+                Cycle = self.wb.cell(row=i, column=self.CycleCol).value
+                Signal = self.wb.cell(row=i, column=self.SigCol).value
+                Variable = self.wb.cell(row=i, column=self.VarNameCol).value
+                Sender = self.wb.cell(row=i, column=self.SenderCol).value
+
+                ### Search E2E Message ###
+                q = n.match(str(Signal))
+                if q: #include crc signal
+                    E2E_RxMessage.append(Message)
+
+                p = m.match(str(Variable))
+                if p:
+                   CAN_Message_ind.append([Message, int(Cycle)])
+                   CAN_RxSingal.append([Message, Signal, Variable, Sender])
+                else:
+                    pass
+            elif CANChannel ==  "G-CANFD" or CANChannel == "C/P/G-CANFD" and RxTx == "Tx":
+                Message = self.wb.cell(row=i, column=self.MsgCol).value
+                Signal = self.wb.cell(row=i, column=self.SigCol).value
+                Variable = self.wb.cell(row=i, column=self.VarNameCol).value
+                size = self.wb.cell(row=i, column=self.TypeCol).value
+
+                ### Search E2E Message ###
+                q = n.match(str(Signal))
+                if q:  # include crc signal
+                    E2E_TxMessage.append(Message)
+
+                p = m.match(str(Variable))
+                if p:
+                    CAN_Tx_Message.append(Message)
+                    CAN_TxSingal.append([Message, Signal, Variable, size])
+                else:
+                    pass
+
+
+        print("E2E_TxMessage:", E2E_TxMessage)
+        print("E2E_RxMessage:", E2E_RxMessage)
+
+        # remove duplicated factor through 'set'
+        CAN_Message_ind = set(map(tuple, CAN_Message_ind)) # remove 2 dimension list
+        CAN_Tx_Message = set(CAN_Tx_Message)
+        # it should be changed list type, which is able to access
+        CAN_Message_ind = list(CAN_Message_ind)
+        CAN_Tx_Message = list(CAN_Tx_Message)
+
+        for msg, cycle in CAN_Message_ind:
+            CAN_Message_ind_E2E.append([msg, int(cycle), 0])
+
+        for idx, a in enumerate(CAN_Message_ind_E2E):
+            for temp in E2E_RxMessage:
+                if a[0] == temp:
+                    CAN_Message_ind_E2E[idx][2] = 1 ## E2E Message
+
+        for msg in CAN_Tx_Message:
+            CAN_Tx_Message_E2E.append([msg, 0])
+
+        for idx, a in enumerate(CAN_Tx_Message_E2E):
+            for temp in E2E_TxMessage:
+                if a[0] == temp:
+                    CAN_Tx_Message_E2E[idx][1] = 1 ## E2E Message
+
+        print("CAN_TxMessage:", CAN_Tx_Message)
+        print("CAN_TxMessage length:", len(CAN_Tx_Message))
+        print("CAN_TxMessage E2E:", CAN_Tx_Message_E2E)
+        print("CAN_TxMessage E2E length:", len(CAN_Tx_Message_E2E))
+
+        for Name, Cycle, E2E_Flag in CAN_Message_ind_E2E:
+            Source += codeStyle.Indicate_Function(filename[0], Name, Cycle) # Message Ind, Timeout Ind function create
+            for Message, Signal, Variable, Sender in CAN_RxSingal:
+                if Message == Name:
+                   if E2E_Flag == 1:
+                       RxSignalSet += codeStyle.Rx_E2E_Signal(Variable, Message, Signal)  # variable receive of assigned message
+                   else:
+                       RxSignalSet += codeStyle.Rx_Signal(Variable, filename[0],ClusterName, Message, Signal) # variable receive of assigned message
+            RxFunctionSet += codeStyle.Rx_Function(ClusterName, filename[0], Name, RxSignalSet, E2E_Flag) # merge between function and receive variable
+            RxOperSet += codeStyle.Rx_FunctionSet(filename[0], Name)
+            RxSignalSet = "" #initialize
+        #print("source:", Source)
+        RTERxFunction = codeStyle.RTE_Rx_Function(filename[0], RxOperSet)
+        Source += RxFunctionSet # add Rx signal logic
+
+        for TxMessage, E2E_Flag in CAN_Tx_Message_E2E:
+            for Message, Signal, Variable, size in CAN_TxSingal:
+                if TxMessage == Message:
+                   TxVarOldSet += codeStyle.variable_Old(size, Variable)
+                   TxSignalSet += codeStyle.Tx_Signal(Variable, filename[0],ClusterName, Message, Signal, E2E_Flag)
+            TxFunctionSet += codeStyle.Tx_Function(filename[0],ClusterName, TxMessage,TxVarOldSet,TxSignalSet, E2E_Flag)
+            TxOperSet += codeStyle.Tx_FunctionSet(filename[0], TxMessage)
+            TxVarOldSet = "" #initialize
+            TxSignalSet = "" #initialize
+
+        Source += TxFunctionSet  # add Tx signal logic
+
+        RTETxFunction = codeStyle.RTE_Tx_Function(filename[0], TxOperSet)
+
+        Source += RTERxFunction # add Rx RTE function
+        Source += RTETxFunction # add Tx RTE function
+
+        with open(sourcefile, 'a') as f:
+            f.write(Source)
